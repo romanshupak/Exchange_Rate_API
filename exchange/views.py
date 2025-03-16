@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.shortcuts import render
 from rest_framework import generics, permissions, viewsets
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -23,6 +24,18 @@ class CurrencyExchangeViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return CurrencyExchange.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        """Automatically assigns the user
+         and checks balance before exchange"""
+        user_balance = UserBalance.objects.get(user=self.request.user)
+
+        if user_balance.balance <= 0:
+            raise ValidationError(
+                {"error": "Insufficient balance to perform currency exchange"}
+            )
+
+        serializer.save(user=self.request.user)
 
 
 class BalanceView(APIView):
