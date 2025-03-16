@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.contrib.auth import get_user_model
 from django.shortcuts import render
 from rest_framework import generics, permissions, viewsets
@@ -44,7 +46,14 @@ class BalanceView(APIView):
     # authentication_classes = (JWTAuthentication,)
 
     def get(self, request):
-        user_balance, created = UserBalance.objects.get_or_create(user=request.user)
+        try:
+            user_balance = UserBalance.objects.get(user=request.user)
+        except UserBalance.DoesNotExist:
+            user_balance = UserBalance.objects.create(
+                user=request.user,
+                balance=1000
+            )
+
         return Response({"balance": user_balance.balance})
 
 
@@ -56,11 +65,15 @@ class CurrencyHistoryView(generics.ListAPIView):
     def get_queryset(self):
         queryset = CurrencyExchange.objects.filter(user=self.request.user)
         currency = self.request.query_params.get("currency")
-        date = self.request.query_params.get("date")
+        date_str = self.request.query_params.get("date")
 
         if currency:
             queryset = queryset.filter(currency_code=currency)
-        if date:
-            queryset = queryset.filter(created_at__date=date)
+        if date_str:
+            try:
+                date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+                queryset = queryset.filter(created_at__date=date_obj)
+            except ValueError:
+                pass  # Просто ігноруємо помилку формату
 
         return queryset
