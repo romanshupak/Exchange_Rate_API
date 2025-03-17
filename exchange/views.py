@@ -1,11 +1,14 @@
+import requests
+
 from datetime import datetime
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.shortcuts import render
 from rest_framework import generics, permissions, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from exchange.models import CurrencyExchange, UserBalance
 from exchange.serializers import RegisterSerializer, CurrencyExchangeSerializer
@@ -19,31 +22,58 @@ class RegisterView(generics.CreateAPIView):
 
 
 class CurrencyExchangeViewSet(viewsets.ModelViewSet):
-    """Get currency rate and save it to the database"""
+    """Get currency rate from external API and save it to the database"""
     serializer_class = CurrencyExchangeSerializer
     permission_classes = (permissions.IsAuthenticated,)
-    # authentication_classes = (JWTAuthentication,)
+    authentication_classes = (JWTAuthentication,)
 
     def get_queryset(self):
         return CurrencyExchange.objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
-        """Automatically assigns the user
-         and checks balance before exchange"""
-        user_balance = UserBalance.objects.get(user=self.request.user)
+        """Automatically assigns the user, fetches exchange rate,
+        and checks balance before exchange"""
+        user = self.request.user
+
+        user_balance, created = UserBalance.objects.get_or_create(user=user)
 
         if user_balance.balance <= 0:
             raise ValidationError(
                 {"error": "Insufficient balance to perform currency exchange"}
             )
 
-        serializer.save(user=self.request.user)
+        currency_code = self.request.data.get("currency_code")
+        if not currency_code:
+            raise ValidationError({"error": "Currency code is required"})
+
+        # Request to exchange rate API
+        api_url = f"{settings.EXCHANGE_RATE_API_URL}/{settings.EXCHANGE_RATE_API_KEY}/latest/{currency_code}"
+        # print(f"📡 Sending request to: {api_url}")  # Add print in console
+
+        response = requests.get(api_url)
+        # print(f"📡 API Response: {response.status_code} - {response.text}")  # print in console
+
+        if response.status_code != 200:
+            raise ValidationError({"error": "Failed to fetch exchange rate"})
+
+        data = response.json()
+        rate = data.get("conversion_rates", {}).get("UAH")  # Hryvna`s rate
+
+        if not rate:
+            raise ValidationError({"error": "Invalid currency code"})
+
+        # Saves data
+        serializer.save(user=user, rate=rate)
+
+        # Minus 1 from balance
+        user_balance.balance -= 1
+        user_balance.save()
 
 
 class BalanceView(APIView):
     """Current user`s balance"""
     permission_classes = (permissions.IsAuthenticated,)
-    # authentication_classes = (JWTAuthentication,)
+    authentication_classes = (JWTAuthentication,)
 
     def get(self, request):
         try:
@@ -74,6 +104,6 @@ class CurrencyHistoryView(generics.ListAPIView):
                 date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
                 queryset = queryset.filter(created_at__date=date_obj)
             except ValueError:
-                pass  # Просто ігноруємо помилку формату
+                pass
 
         return queryset
